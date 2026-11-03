@@ -131,43 +131,9 @@ const WRITERS = [
     },
 ];
 
-// --- Curated Stock Images Pool (Unsplash CDN) ---
-const CATEGORY_IMAGES = {
-    tech: [
-        "https://images.unsplash.com/photo-1518770660439-4636190af475?q=80&w=1470&auto=format&fit=crop",
-        "https://images.unsplash.com/photo-1550751827-4bd374c3f58b?q=80&w=1470&auto=format&fit=crop",
-        "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=1470&auto=format&fit=crop",
-    ],
-    culture: [
-        "https://images.unsplash.com/photo-1513364776144-60967b0f800f?q=80&w=1470&auto=format&fit=crop",
-        "https://images.unsplash.com/photo-1499781350541-7783f6c6a0c8?q=80&w=1470&auto=format&fit=crop",
-        "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?q=80&w=1470&auto=format&fit=crop",
-    ],
-    hustle: [
-        "https://images.unsplash.com/photo-1454165804606-c3d57bc86b40?q=80&w=1470&auto=format&fit=crop",
-        "https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?q=80&w=1470&auto=format&fit=crop",
-        "https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?q=80&w=1470&auto=format&fit=crop",
-    ],
-    wellness: [
-        "https://images.unsplash.com/photo-1506126613408-eca07ce68773?q=80&w=1470&auto=format&fit=crop",
-        "https://images.unsplash.com/photo-1544367567-0f2fcb009e0b?q=80&w=1470&auto=format&fit=crop",
-        "https://images.unsplash.com/photo-1508672019048-805c876b67e2?q=80&w=1470&auto=format&fit=crop",
-    ],
-    planet: [
-        "https://images.unsplash.com/photo-1441974231531-c6227db76b6e?q=80&w=1470&auto=format&fit=crop",
-        "https://images.unsplash.com/photo-1466611653911-95081537e5b7?q=80&w=1470&auto=format&fit=crop",
-        "https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?q=80&w=1470&auto=format&fit=crop",
-    ],
-    world: [
-        "https://images.unsplash.com/photo-1451187580459-43490279c0fa?q=80&w=1470&auto=format&fit=crop",
-        "https://images.unsplash.com/photo-1488590528505-98d2b5aba04b?q=80&w=1470&auto=format&fit=crop",
-    ],
-};
-
-function pickCategoryCover(category) {
-    const key = category?.toLowerCase();
-    const list = CATEGORY_IMAGES[key] || CATEGORY_IMAGES.tech;
-    return list[Math.floor(Math.random() * list.length)];
+// --- Curated Stock Images Pool (Disabled for pure typography-first reading experience) ---
+function pickCategoryCover() {
+    return null;
 }
 
 function pickWriter(categoryOrTopic) {
@@ -365,21 +331,18 @@ ${rawDraft}
     const finalWords = humanizedMarkdown.split(/\s+/).filter(Boolean).length;
     console.log(`${C.green}✓ DONE${C.reset} (${finalWords} words)`);
 
-    // STAGE 4: VISUAL ASSET & SEO METADATA
-    process.stdout.write(`\n${C.bold}[4/5] 🎨 STAGE 4: Resolving Visual Assets & SEO Metadata...${C.reset} `);
-
-    const coverImage = pickCategoryCover(category);
+    // STAGE 4: TECHNICAL SEO & EDITORIAL DECK (Text-First Reading Sanctuary)
+    process.stdout.write(`\n${C.bold}[4/5] 🎯 STAGE 4: Technical SEO & Editorial Deck...${C.reset} `);
 
     const stage4Prompt = `
-Generate SEO metadata for this article:
+Generate SEO metadata and editorial deck for this article:
 Title: ${stage1Data.workingTitle}
 Content excerpt: ${humanizedMarkdown.slice(0, 300)}
 
 Return a strict JSON object with:
-1. "excerpt": A compelling 1-2 sentence teaser (max 140 chars).
+1. "excerpt": A compelling 1-2 sentence editorial teaser / deck (max 140 chars).
 2. "seoTitle": High-CTR search title under 60 chars.
 3. "seoDescription": Meta description between 120 and 155 chars.
-4. "imageAlt": Descriptive image alt text under 10 words.
 
 Return ONLY raw JSON:
 `;
@@ -393,13 +356,12 @@ Return ONLY raw JSON:
             excerpt: cleanString(humanizedMarkdown.split("\n").find((l) => l.length > 30 && !l.startsWith("#")) || stage1Data.coreAngle).slice(0, 140),
             seoTitle: stage1Data.workingTitle.slice(0, 60),
             seoDescription: stage1Data.coreAngle.slice(0, 150),
-            imageAlt: `${stage1Data.seoKeyword} concept visual`,
         };
     }
 
     console.log(`${C.green}✓ DONE${C.reset}`);
-    console.log(`      Cover Image: ${C.dim}${coverImage.slice(0, 60)}...${C.reset}`);
     console.log(`      SEO Title: ${C.dim}${stage4Data.seoTitle}${C.reset}`);
+    console.log(`      Teaser:    ${C.dim}${stage4Data.excerpt}${C.reset}`);
 
     // STAGE 5: PROGRAMMATIC QUALITY CHECKS & PUBLISHING
     process.stdout.write(`\n${C.bold}[5/5] 🚀 STAGE 5: Programmatic Gate & Supabase Publishing...${C.reset} `);
@@ -452,7 +414,7 @@ Return ONLY raw JSON:
         slug: slug,
         excerpt: stage4Data.excerpt || stage1Data.coreAngle.slice(0, 140),
         content: htmlContent,
-        cover_image: coverImage,
+        cover_image: null,
         category: category,
         status: effectiveStatus,
         source_url: "#",
@@ -465,7 +427,7 @@ Return ONLY raw JSON:
         seo_title: stage4Data.seoTitle || stage1Data.workingTitle,
         seo_description: stage4Data.seoDescription || stage4Data.excerpt,
         focus_keyword: stage1Data.seoKeyword,
-        cover_image_alt: stage4Data.imageAlt || stage1Data.seoKeyword,
+        cover_image_alt: null,
     };
 
     const { error } = await supabase.from("articles").insert(articlePayload).select().single();
