@@ -283,13 +283,69 @@ function calcReadTime(text) {
     return Math.max(1, Math.ceil(words / 200));
 }
 
+// --- Dynamic Editorial Balancer ---
+async function pickNextBalancedCategory(recentHistory = []) {
+    try {
+        if (SUPABASE_URL && SUPABASE_KEY) {
+            const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
+                auth: { autoRefreshToken: false, persistSession: false },
+            });
+            const { data } = await supabase.from("articles").select("category");
+            if (data && data.length > 0) {
+                const counts = {};
+                CATEGORIES.forEach((c) => { counts[c.id] = 0; });
+                data.forEach((r) => {
+                    const c = (r.category || "").toLowerCase().trim();
+                    if (counts[c] !== undefined) counts[c]++;
+                });
+
+                // Find lowest article count across all categories
+                const minCount = Math.min(...Object.values(counts));
+                let candidates = CATEGORIES.filter((c) => counts[c.id] === minCount);
+
+                // Filter out recently published beats in this session to prevent repetition
+                const notRecent = candidates.filter((c) => !recentHistory.includes(c.id));
+                if (notRecent.length > 0) {
+                    candidates = notRecent;
+                }
+
+                // If all lowest candidates were recently covered, allow minCount + 1
+                if (candidates.length === 0) {
+                    const nextMin = minCount + 1;
+                    candidates = CATEGORIES.filter((c) => counts[c.id] <= nextMin && !recentHistory.includes(c.id));
+                }
+
+                const chosen = candidates[Math.floor(Math.random() * candidates.length)] || CATEGORIES[0];
+                return {
+                    category: chosen,
+                    count: counts[chosen.id] ?? 0,
+                    minCount,
+                    isBalanced: true,
+                };
+            }
+        }
+    } catch {
+        // Fall back to offline rotation if network/database check fails
+    }
+
+    const pool = CATEGORIES.filter((c) => !recentHistory.includes(c.id));
+    const chosen = (pool.length > 0 ? pool : CATEGORIES)[Math.floor(Math.random() * (pool.length > 0 ? pool.length : CATEGORIES.length))];
+    return { category: chosen, count: 0, minCount: 0, isBalanced: false };
+}
+
 // --- Multi-Beat Signal Discovery ---
 async function fetchTrendingSignals(preferredCategory) {
     const feeds = [
-        { name: "Google Trends US", category: "culture", url: "https://trends.google.com/trends/trendingsearches/daily/rss?geo=US" },
+        { name: "Google Trends", category: "culture", url: "https://trends.google.com/trends/trendingsearches/daily/rss?geo=US" },
         { name: "The Verge", category: "tech", url: "https://www.theverge.com/rss/index.xml" },
         { name: "Ars Technica", category: "science", url: "https://feeds.arstechnica.com/arstechnica/index" },
         { name: "TechCrunch", category: "business", url: "https://techcrunch.com/feed/" },
+        { name: "Polygon", category: "gaming", url: "https://www.polygon.com/rss/index.xml" },
+        { name: "BBC Sport", category: "sports", url: "http://feeds.bbci.co.uk/sport/rss.xml" },
+        { name: "CoinDesk", category: "money", url: "https://www.coindesk.com/arc/outboundfeeds/rss/" },
+        { name: "Highsnobiety", category: "style", url: "https://www.highsnobiety.com/feed/" },
+        { name: "ScienceDaily", category: "science", url: "https://www.sciencedaily.com/rss/all.xml" },
+        { name: "Inside Climate", category: "planet", url: "https://insideclimatenews.org/feed/" },
     ];
 
     const signals = [];
@@ -581,25 +637,27 @@ async function countdownSleep(seconds) {
 // --- Continuous Newsroom Simulator ---
 async function startContinuousNewsroom({ intervalSeconds = 300, dryRun = false, status = "published" }) {
     let articleCount = 0;
-    let categoryIndex = 0;
+    const recentHistory = [];
 
     console.clear();
     console.log(`${C.bold}${C.magenta}╔══════════════════════════════════════════════════════════════════════╗${C.reset}`);
     console.log(`${C.bold}${C.magenta}║${C.reset}   ${C.bold}${C.cyan}3AM SCROLL — CONTINUOUS NEWSROOM AUTOPILOT (v2.0)                 ${C.reset}${C.bold}${C.magenta}║${C.reset}`);
-    console.log(`${C.bold}${C.magenta}║${C.reset}   ${C.dim}Systematic publishing across all 15 beats with humanized pacing     ${C.reset}${C.bold}${C.magenta}║${C.reset}`);
+    console.log(`${C.bold}${C.magenta}║${C.reset}   ${C.dim}Intelligent dynamic editorial balance across all 15 beats           ${C.reset}${C.bold}${C.magenta}║${C.reset}`);
     console.log(`${C.bold}${C.magenta}╚══════════════════════════════════════════════════════════════════════╝${C.reset}\n`);
 
     console.log(`Publishing Cadence: ${C.yellow}~Every ${Math.round(intervalSeconds / 60)} minute(s)${C.reset} (with natural jitter)`);
-    console.log(`Target Beats:       ${C.green}${CATEGORIES.length} Categories${C.reset} in rotating newsroom cycles`);
+    console.log(`Target Beats:       ${C.green}${CATEGORIES.length} Categories${C.reset} in dynamic editorial balance`);
     console.log(`Output Mode:        ${status === "draft" ? C.yellow + "DRAFT (Queued in Admin Studio for editorial signoff)" : C.green + "LIVE (Published directly to 3amscroll.com)"}${C.reset}`);
-    console.log(`Free Tier Safety:   Active (safe pacing, zero rate limit spikes)\n`);
+    console.log(`Dynamic Balancer:   Active (prioritizes under-represented beats before recurring)\n`);
 
     while (true) {
-        const currentCategory = CATEGORIES[categoryIndex % CATEGORIES.length];
-        categoryIndex++;
         articleCount++;
+        const { category: currentCategory, count: currentCount } = await pickNextBalancedCategory(recentHistory);
+        recentHistory.push(currentCategory.id);
+        if (recentHistory.length > 5) recentHistory.shift();
 
-        console.log(`\n${C.bold}[NEWSROOM DISPATCH #${articleCount}] Beat: ${C.yellow}${currentCategory.name.toUpperCase()}${C.reset} | Time: ${new Date().toLocaleTimeString()}`);
+        console.log(`\n${C.bold}[NEWSROOM DISPATCH #${articleCount}] Beat: ${C.yellow}${currentCategory.name.toUpperCase()}${C.reset} | Current DB Count: ${currentCount} stories | Time: ${new Date().toLocaleTimeString()}`);
+        console.log(`      ${C.dim}⚖️  Editorial Balancer: Prioritizing under-represented beat "${currentCategory.name}"${C.reset}`);
 
         try {
             // Find or ideate signal for this specific beat
@@ -720,13 +778,18 @@ async function main() {
                 await askQuestion(`\nPress Enter to return to menu...`);
             }
         } else if (choice === "2") {
-            console.log(`\nDiscovering live signals across tech, culture, and world feeds...`);
-            const signals = await fetchTrendingSignals();
-            const signal = signals[Math.floor(Math.random() * signals.length)] || {
-                title: "Why Gen Z is ditching algorithmic feeds for digital sanctuaries",
-            };
-            console.log(`Selected Signal: "${signal.title}" (${signal.source})\n`);
-            await runHimaPipeline({ topicIdea: signal.title, status: currentMode });
+            const { category: balancedCat, count: catCount } = await pickNextBalancedCategory();
+            console.log(`\n⚖️  Editorial Balancer: Auto-targeting under-represented beat [${balancedCat.name.toUpperCase()}] (${catCount} stories in DB)...`);
+            const signals = await fetchTrendingSignals(balancedCat.id);
+            let chosenTopic = "";
+            if (signals.length > 0 && Math.random() > 0.3) {
+                const s = signals[Math.floor(Math.random() * signals.length)];
+                chosenTopic = s.title;
+            } else {
+                chosenTopic = await generateZeitgeistTopic(balancedCat);
+            }
+            console.log(`Selected Signal: "${chosenTopic}"\n`);
+            await runHimaPipeline({ topicIdea: chosenTopic, requestedCategory: balancedCat.id, status: currentMode });
             await askQuestion(`\nPress Enter to return to menu...`);
         } else if (choice === "3") {
             console.log(`\nSelect publishing cadence:`);
