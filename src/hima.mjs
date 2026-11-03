@@ -202,6 +202,15 @@ const WRITERS = [
         focus: ["planet", "environment", "climate"],
         voicePrompt: "Write like a climate-tech reporter: skip the doom-mongering, focus on real engineering, biodiversity, and how humans survive.",
     },
+    {
+        id: "marcus-vance",
+        name: "Marcus Vance",
+        avatar: "https://api.dicebear.com/7.x/avataaars/svg?seed=marcus",
+        tone: "Visceral & kinetic",
+        style: "Kinetic, human-limits focused, psychologically deep",
+        focus: ["sports", "athletics", "endurance", "fitness", "racing"],
+        voicePrompt: "Write like a modern longform sports essayist: explore human physiological limits, competitive obsession, recovery science, and the psychological architecture of peak performance.",
+    },
 ];
 
 function pickWriter(categoryOrTopic) {
