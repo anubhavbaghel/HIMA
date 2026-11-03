@@ -1,6 +1,6 @@
 {
   "name": "hima",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Human + AI Media Assembly (HIMA v2.0) — Autonomous Continuous Newsroom Simulator for 3AM SCROLL",
   "type": "module",
   "main": "src/hima.mjs",
