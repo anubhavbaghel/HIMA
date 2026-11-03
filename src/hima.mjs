@@ -531,9 +531,11 @@ Return ONLY raw JSON:
     }
 
     console.log(`${C.green}✓ SUCCESS!${C.reset}\n`);
-    const liveUrl = `${BASE_URL}/article/${articlePayload.slug}`;
+    const liveUrl = effectiveStatus === "published"
+        ? `${BASE_URL}/article/${articlePayload.slug}`
+        : `${BASE_URL}/admin`;
     console.log(`${C.bold}${C.green}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C.reset}`);
-    console.log(`${C.bold}🎉 ARTICLE ${effectiveStatus === "published" ? "LIVE ON 3AM SCROLL" : "HELD AS DRAFT"}:${C.reset}`);
+    console.log(`${C.bold}🎉 ARTICLE ${effectiveStatus === "published" ? "LIVE ON 3AM SCROLL" : "SAVED AS DRAFT (Admin Review)"}:${C.reset}`);
     console.log(`   ${C.cyan}${C.bold}${liveUrl}${C.reset}`);
     console.log(`   Title:     ${articlePayload.title}`);
     console.log(`   Author:    ${writer.name}`);
@@ -568,7 +570,7 @@ async function countdownSleep(seconds) {
 }
 
 // --- Continuous Newsroom Simulator ---
-async function startContinuousNewsroom({ intervalSeconds = 300, dryRun = false }) {
+async function startContinuousNewsroom({ intervalSeconds = 300, dryRun = false, status = "published" }) {
     let articleCount = 0;
     let categoryIndex = 0;
 
@@ -580,6 +582,7 @@ async function startContinuousNewsroom({ intervalSeconds = 300, dryRun = false }
 
     console.log(`Publishing Cadence: ${C.yellow}~Every ${Math.round(intervalSeconds / 60)} minute(s)${C.reset} (with natural jitter)`);
     console.log(`Target Beats:       ${C.green}${CATEGORIES.length} Categories${C.reset} in rotating newsroom cycles`);
+    console.log(`Output Mode:        ${status === "draft" ? C.yellow + "DRAFT (Queued in Admin Studio for editorial signoff)" : C.green + "LIVE (Published directly to 3amscroll.com)"}${C.reset}`);
     console.log(`Free Tier Safety:   Active (safe pacing, zero rate limit spikes)\n`);
 
     while (true) {
@@ -604,6 +607,7 @@ async function startContinuousNewsroom({ intervalSeconds = 300, dryRun = false }
                 topicIdea: chosenTopic,
                 requestedCategory: currentCategory.id,
                 dryRun,
+                status,
             });
 
             // Realistic human jitter: ±15 to ±45 seconds
@@ -646,6 +650,8 @@ async function main() {
     const hasAutopilot = args.includes("--autopilot") || args.includes("--simulate") || args.includes("--continuous");
     const isFast = args.includes("--fast");
     const dryRun = args.includes("--dry-run");
+    const asDraft = args.includes("--draft");
+    let currentMode = asDraft ? "draft" : "published";
 
     const categoryIdx = args.indexOf("--category");
     const cliCategory = categoryIdx !== -1 && args[categoryIdx + 1] ? args[categoryIdx + 1] : null;
@@ -665,13 +671,13 @@ async function main() {
 
     // Direct single topic
     if (cliTopic) {
-        await runHimaPipeline({ topicIdea: cliTopic, requestedCategory: cliCategory, dryRun });
+        await runHimaPipeline({ topicIdea: cliTopic, requestedCategory: cliCategory, dryRun, status: currentMode });
         return;
     }
 
     // Direct Autopilot / Continuous Newsroom
     if (hasAutopilot) {
-        await startContinuousNewsroom({ intervalSeconds, dryRun });
+        await startContinuousNewsroom({ intervalSeconds, dryRun, status: currentMode });
         return;
     }
 
@@ -683,19 +689,25 @@ async function main() {
         console.log(`${C.bold}${C.magenta}║${C.reset}   ${C.dim}High-Velocity Independent Media Agent for 3amscroll.com             ${C.reset}${C.bold}${C.magenta}║${C.reset}`);
         console.log(`${C.bold}${C.magenta}╚══════════════════════════════════════════════════════════════════════╝${C.reset}\n`);
 
+        const modeBadge = currentMode === "published"
+            ? `${C.green}${C.bold}🟢 LIVE ON 3AMSCROLL.COM${C.reset}`
+            : `${C.yellow}${C.bold}🟡 DRAFT (Held in Admin Studio for Review)${C.reset}`;
+        console.log(`Current Publishing Target: ${modeBadge}\n`);
+
         console.log(`Select an option:`);
         console.log(`  ${C.bold}${C.green}1${C.reset}) 📝 Pitch custom topic idea`);
         console.log(`  ${C.bold}${C.cyan}2${C.reset}) 📡 Auto-spot from live Google Trends & multi-beat feeds`);
         console.log(`  ${C.bold}${C.yellow}3${C.reset}) ⚡ Start Continuous Newsroom Simulator (Autopilot)`);
         console.log(`  ${C.bold}${C.blue}4${C.reset}) 🎯 Publish single article for a specific Category`);
-        console.log(`  ${C.bold}${C.red}5${C.reset}) 🚪 Exit\n`);
+        console.log(`  ${C.bold}${C.magenta}5${C.reset}) 🔀 Toggle Output Mode (${currentMode === "published" ? "Switch to Draft" : "Switch to Live"})`);
+        console.log(`  ${C.bold}${C.red}6${C.reset}) 🚪 Exit\n`);
 
-        const choice = await askQuestion(`${C.bold}Enter your choice [1-5]: ${C.reset}`);
+        const choice = await askQuestion(`${C.bold}Enter your choice [1-6]: ${C.reset}`);
 
         if (choice === "1") {
             const topic = await askQuestion(`\nEnter your headline or topic idea: `);
             if (topic) {
-                await runHimaPipeline({ topicIdea: topic });
+                await runHimaPipeline({ topicIdea: topic, status: currentMode });
                 await askQuestion(`\nPress Enter to return to menu...`);
             }
         } else if (choice === "2") {
@@ -705,7 +717,7 @@ async function main() {
                 title: "Why Gen Z is ditching algorithmic feeds for digital sanctuaries",
             };
             console.log(`Selected Signal: "${signal.title}" (${signal.source})\n`);
-            await runHimaPipeline({ topicIdea: signal.title });
+            await runHimaPipeline({ topicIdea: signal.title, status: currentMode });
             await askQuestion(`\nPress Enter to return to menu...`);
         } else if (choice === "3") {
             console.log(`\nSelect publishing cadence:`);
@@ -714,7 +726,7 @@ async function main() {
             console.log(`  c) Steady Daily Rhythm (1 new story every 15 minutes)`);
             const speedChoice = await askQuestion(`Enter choice [a/b/c] (default b): `);
             const pace = speedChoice === "a" ? 60 : speedChoice === "c" ? 900 : 300;
-            await startContinuousNewsroom({ intervalSeconds: pace });
+            await startContinuousNewsroom({ intervalSeconds: pace, status: currentMode });
             return;
         } else if (choice === "4") {
             console.log(`\nAvailable Beats:`);
@@ -726,9 +738,11 @@ async function main() {
             console.log(`\nGenerating story for beat: ${chosenCategory.name}...`);
             const topic = await generateZeitgeistTopic(chosenCategory);
             console.log(`Ideated Topic: "${topic}"\n`);
-            await runHimaPipeline({ topicIdea: topic, requestedCategory: chosenCategory.id });
+            await runHimaPipeline({ topicIdea: topic, requestedCategory: chosenCategory.id, status: currentMode });
             await askQuestion(`\nPress Enter to return to menu...`);
         } else if (choice === "5") {
+            currentMode = currentMode === "published" ? "draft" : "published";
+        } else if (choice === "6") {
             console.log(`\nShutting down HIMA. Goodnight.\n`);
             process.exit(0);
         }
