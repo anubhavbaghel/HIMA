@@ -1,12 +1,14 @@
 {
   "name": "hima",
-  "version": "1.0.0",
-  "description": "Human + AI Media Assembly (HIMA) — Autonomous Zero-Cost Content Publishing Engine for 3AM SCROLL",
+  "version": "2.0.0",
+  "description": "Human + AI Media Assembly (HIMA v2.0) — Autonomous Continuous Newsroom Simulator for 3AM SCROLL",
   "type": "module",
   "main": "src/hima.mjs",
   "scripts": {
     "start": "node src/hima.mjs",
     "dev": "node src/hima.mjs",
+    "autopilot": "node src/hima.mjs --autopilot",
+    "autopilot:fast": "node src/hima.mjs --autopilot --fast",
     "dry-run": "node src/hima.mjs --dry-run",
     "build:exe": "node scripts/build-exe.mjs",
     "test": "node test.mjs"
@@ -18,7 +20,8 @@
     "gemini",
     "supabase",
     "content-automation",
-    "anti-ai-humanizer"
+    "anti-ai-humanizer",
+    "newsroom-simulator"
   ],
   "author": "3AM SCROLL Editorial Team",
   "license": "MIT",
