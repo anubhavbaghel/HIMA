@@ -14,6 +14,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
+import { exec } from "node:child_process";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { createClient } from "@supabase/supabase-js";
 import { marked } from "marked";
@@ -219,14 +220,70 @@ function pickWriter(categoryOrTopic) {
     return match || WRITERS[Math.floor(Math.random() * WRITERS.length)];
 }
 
+// --- Execution Timeout Guard ---
+function withTimeout(promise, ms, opName = "Operation") {
+    let timer;
+    const timeoutPromise = new Promise((_, reject) => {
+        timer = setTimeout(() => {
+            const err = new Error(`${opName} timed out after ${Math.round(ms / 1000)}s`);
+            err.code = "ETIMEDOUT";
+            reject(err);
+        }, ms);
+    });
+
+    return Promise.race([
+        Promise.resolve(promise).finally(() => clearTimeout(timer)),
+        timeoutPromise,
+    ]);
+}
+
+// --- Windows Inactivity / Sleep & QuickEdit Preventer ---
+function initWindowsPlatformGuards() {
+    if (process.platform !== "win32") return;
+
+    // 1. Disable Windows QuickEdit mode in registry to prevent terminal pause on mouse clicks
+    try {
+        exec('reg add "HKCU\\Console" /v QuickEdit /t REG_DWORD /d 0 /f', { windowsHide: true }, () => {});
+    } catch {}
+
+    // 2. Prevent Windows from entering system sleep or powering down network while newsroom runs
+    try {
+        const psCommand = `
+$code = @'
+using System;
+using System.Runtime.InteropServices;
+public class WinPower {
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern uint SetThreadExecutionState(uint esFlags);
+    public static void PreventSleep() {
+        SetThreadExecutionState(0x80000000 | 0x00000001 | 0x00000040);
+    }
+}
+'@
+Add-Type -TypeDefinition $code -ErrorAction SilentlyContinue
+[WinPower]::PreventSleep()
+`;
+        exec(`powershell -NoProfile -NonInteractive -Command "${psCommand.replace(/\r?\n/g, " ")}"`, { windowsHide: true }, () => {});
+    } catch {}
+}
+
+// Process-level resilience against unhandled events
+process.on("unhandledRejection", (reason) => {
+    console.error(`\n${C.yellow}⚠️  [HIMA Auto-Recovery] Unhandled Rejection intercepted:${C.reset}`, reason?.message || reason);
+});
+process.on("uncaughtException", (err) => {
+    console.error(`\n${C.red}⚠️  [HIMA Auto-Recovery] Uncaught Exception intercepted:${C.reset}`, err?.message || err);
+});
+
 // --- Gemini AI Wrapper ---
-async function callGemini(systemInstruction, prompt) {
+async function callGemini(systemInstruction, prompt, timeoutMs = 40000) {
     if (!GEMINI_API_KEY) {
         throw new Error("Missing GOOGLE_GEMINI_API_KEY in .env.local");
     }
 
     const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-    const candidateModels = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-2.5-flash", "gemini-2.5-flash-lite"];
+    // Prioritize active, fast models for this key (gemini-3.5-flash-lite is tested, fast & high-quota)
+    const candidateModels = ["gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-2.5-flash"];
 
     let lastError = null;
     for (const modelName of candidateModels) {
@@ -241,21 +298,35 @@ async function callGemini(systemInstruction, prompt) {
                     },
                 });
 
-                const result = await model.generateContent(prompt);
+                const result = await withTimeout(
+                    model.generateContent(prompt),
+                    timeoutMs,
+                    `Gemini [${modelName}] content generation`
+                );
                 const text = result?.response?.text();
                 if (text && text.trim().length > 0) {
                     return text.trim();
                 }
             } catch (err) {
                 lastError = err;
-                // If temporary overload or rate spike, wait briefly before next attempt/model
-                if (err?.message?.includes("503") || err?.message?.includes("429")) {
-                    await new Promise((r) => setTimeout(r, 2000));
+                const msg = err?.message || String(err);
+                // If model is retired/not found (404), immediately try next candidate model
+                if (msg.includes("404") || msg.includes("not found") || msg.includes("no longer available")) {
+                    break;
+                }
+                // If rate limited (429 / quota limit), break to next model without long stall
+                if (msg.includes("429") || msg.includes("Quota exceeded") || msg.includes("Too Many Requests")) {
+                    await new Promise((r) => setTimeout(r, 1000));
+                    break;
+                }
+                // If socket timeout or 503, brief wait before retry
+                if (attempt === 1) {
+                    await new Promise((r) => setTimeout(r, 1500));
                 }
             }
         }
     }
-    throw new Error(`Gemini AI call failed across all candidate models: ${lastError?.message || lastError}`);
+    throw new Error(`Gemini AI call failed across candidate models: ${lastError?.message || lastError}`);
 }
 
 // --- Programmatic Helpers ---
@@ -290,7 +361,7 @@ async function pickNextBalancedCategory(recentHistory = []) {
             const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
                 auth: { autoRefreshToken: false, persistSession: false },
             });
-            const { data } = await supabase.from("articles").select("category");
+            const { data } = await withTimeout(supabase.from("articles").select("category").limit(300), 8000, "Supabase category balancer");
             if (data && data.length > 0) {
                 const counts = {};
                 CATEGORIES.forEach((c) => { counts[c.id] = 0; });
@@ -333,7 +404,7 @@ async function pickNextBalancedCategory(recentHistory = []) {
     return { category: chosen, count: 0, minCount: 0, isBalanced: false };
 }
 
-// --- Multi-Beat Signal Discovery ---
+// --- Multi-Beat Signal Discovery (Parallelized with strict timeout) ---
 async function fetchTrendingSignals(preferredCategory) {
     const feeds = [
         { name: "Google Trends", category: "culture", url: "https://trends.google.com/trends/trendingsearches/daily/rss?geo=US" },
@@ -348,28 +419,43 @@ async function fetchTrendingSignals(preferredCategory) {
         { name: "Inside Climate", category: "planet", url: "https://insideclimatenews.org/feed/" },
     ];
 
-    const signals = [];
-    for (const feed of feeds) {
-        if (preferredCategory && feed.category !== preferredCategory && Math.random() > 0.3) {
-            continue;
+    const selectedFeeds = feeds.filter(feed => {
+        if (preferredCategory && feed.category !== preferredCategory && Math.random() > 0.4) {
+            return false;
         }
+        return true;
+    });
+
+    const feedPromises = selectedFeeds.map(async (feed) => {
         try {
-            const res = await fetch(feed.url, { headers: { "User-Agent": "3AMScroll-HIMA/2.0" }, signal: AbortSignal.timeout(5000) });
-            if (!res.ok) continue;
+            const res = await fetch(feed.url, {
+                headers: { "User-Agent": "3AMScroll-HIMA/2.0" },
+                signal: AbortSignal.timeout(4000),
+            });
+            if (!res.ok) return [];
             const xml = await res.text();
             const itemMatches = xml.match(/<item>([\s\S]*?)<\/item>/g) || [];
-
+            const items = [];
             for (const itemXml of itemMatches.slice(0, 3)) {
                 const titleMatch = itemXml.match(/<title>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?<\/title>/i);
                 const descMatch = itemXml.match(/<description>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?<\/description>/i);
                 const title = cleanString(titleMatch ? titleMatch[1] : "");
                 const desc = cleanString(descMatch ? descMatch[1] : "");
                 if (title && title.length > 5) {
-                    signals.push({ title, desc, source: feed.name });
+                    items.push({ title, desc, source: feed.name });
                 }
             }
+            return items;
         } catch {
-            // Ignore feed timeout
+            return [];
+        }
+    });
+
+    const results = await Promise.allSettled(feedPromises);
+    const signals = [];
+    for (const r of results) {
+        if (r.status === "fulfilled" && Array.isArray(r.value)) {
+            signals.push(...r.value);
         }
     }
     return signals;
@@ -583,12 +669,12 @@ Return ONLY raw JSON:
         cover_image_alt: null,
     };
 
-    const { error } = await supabase.from("articles").insert(articlePayload).select().single();
+    const { error } = await withTimeout(supabase.from("articles").insert(articlePayload).select().single(), 20000, "Supabase article insert");
 
     if (error) {
         if (error.code === "23505") {
             articlePayload.slug = `${slug}-${Math.floor(Math.random() * 899 + 100)}`;
-            const { error: retryErr } = await supabase.from("articles").insert(articlePayload).select().single();
+            const { error: retryErr } = await withTimeout(supabase.from("articles").insert(articlePayload).select().single(), 20000, "Supabase article retry insert");
             if (retryErr) throw retryErr;
         } else {
             throw error;
@@ -623,7 +709,7 @@ async function countdownSleep(seconds) {
             const m = Math.floor(remaining / 60);
             const s = remaining % 60;
             const timeStr = `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
-            process.stdout.write(`\r${C.dim}⏳ Next story edition dropping in ${C.yellow}${timeStr}${C.dim}... (Press Ctrl+C to stop)${C.reset}  `);
+            process.stdout.write(`\r${C.dim}⏳ [Newsroom Active] Next story dropping in ${C.yellow}${timeStr}${C.dim}... (Press Ctrl+C to stop)${C.reset}  `);
 
             if (remaining <= 0) {
                 clearInterval(interval);
