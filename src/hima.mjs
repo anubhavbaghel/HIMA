@@ -283,7 +283,12 @@ async function callGemini(systemInstruction, prompt, timeoutMs = 40000) {
 
     const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
     // Prioritize active, fast models for this key (gemini-3.5-flash-lite is tested, fast & high-quota)
-    const candidateModels = ["gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-2.5-flash"];
+    const candidateModels = [
+        "gemini-3.1-flash-lite",
+        "gemini-flash-lite-latest",
+        "gemini-3-flash-preview",
+        "gemini-3.5-flash-lite",
+    ];
 
     let lastError = null;
     for (const modelName of candidateModels) {
